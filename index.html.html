@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>GridShield Prototype</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#ffffff;--panel:#fff;--line:#dde3f0;--tx:#0f1b33;--mu:#5b6780;--soft:#f3f5fb;--amb:#f7b500;--accT:#b45309;--red:#ef4444;--grn:#22c55e;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--tx);font-family:Calibri,"Segoe UI",system-ui,sans-serif}
+.w{max-width:1100px;margin:0 auto;padding:16px}
+header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+h1{margin:0;font-size:26px}h1 span{color:var(--accT)}h2{margin:0 0 8px;font-size:15px}
+.sub{color:var(--mu);font-size:13px}.live{color:var(--grn);font-weight:700;font-size:13px}
+.kpis,.g{display:grid;gap:12px;margin-bottom:12px}
+.kpis{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}.g{grid-template-columns:repeat(auto-fit,minmax(320px,1fr))}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0;box-shadow:0 1px 3px rgba(15,27,51,.08)}
+.k{border-left:5px solid var(--grn)}.k small{color:var(--mu);font-size:12px;display:block}.k b{font-size:30px}
+svg{width:100%;height:auto;display:block}.t{fill:var(--mu);font-size:10px}.nl{fill:var(--tx);font-size:10px;text-anchor:middle}
+button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--soft);color:var(--tx);border-radius:8px;padding:7px 11px;cursor:pointer}
+button.on{background:var(--amb);color:#0b1220;border-color:var(--amb);font-weight:700}button.d{border-color:var(--red)}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}.bt{display:flex;gap:6px;flex-wrap:wrap}
+.rk{display:grid;grid-template-columns:90px 1fr 34px;gap:8px;align-items:center;font-size:13px;margin:6px 0;cursor:pointer}
+.bar{height:10px;background:var(--soft);border-radius:5px;overflow:hidden}.bar i{display:block;height:100%}
+.al{font-size:13px;padding:8px;border-radius:8px;background:var(--soft);margin:6px 0;border-left:4px solid var(--amb)}
+.al.c{border-color:var(--red)}.al.o{border-color:var(--grn)}.al small{color:var(--mu)}
+.nd{cursor:pointer}.p{animation:p 1s infinite}@keyframes p{50%{opacity:.45}}
+.hint{font-size:12px;color:var(--mu)}
+</style></head><body><main class="w">
+<header><div><h1>Grid<span>Shield</span></h1><div class="sub">Prototype · simulated grid · Isolation Forest → XGBoost → LSTM → Random Forest</div></div><div class="live">● LIVE</div></header>
+<section class="kpis">
+<div class="card k" id="k1"><small>Grid health</small><b></b></div>
+<div class="card k" id="k2"><small>Sections on alert</small><b></b></div>
+<div class="card k" id="k3"><small>High-risk sections</small><b></b></div></section>
+<section class="g">
+<div class="card"><h2>Grid map and fault locations</h2><svg id="map" viewBox="0 0 400 260"></svg><div class="hint">Click a node (or a row below) to inspect it.</div></div>
+<div class="card"><div class="row"><h2 id="ct"></h2><div class="bt" id="tabs"></div></div><svg id="ch" viewBox="0 0 400 190"></svg><div id="info" style="font-size:13px"></div></div></section>
+<section class="card" style="margin-bottom:12px"><div class="row"><div><h2>Try it: inject a fault on the selected node</h2><div class="hint">Models are trained in your browser on simulated grid data. Watch all four react.</div></div>
+<div class="bt"><button data-f="sag">Voltage sag</button><button data-f="ol">Overload</button><button data-f="fr">Frequency drift</button><button class="d" id="rs">Reset all</button><button id="au">Auto-demo: off</button></div></div></section>
+<section class="g"><div class="card"><h2>Predicted risk ranking</h2><div id="rk"></div></div><div class="card"><h2>Real-time alerts</h2><div id="al"><div class="hint">No alerts. Grid is stable.</div></div></div></section>
+</main><script>
+const $=s=>document.querySelector(s);
+// fixed seed: the demo models train identically on every load (live sensor noise stays random)
+const __mr=Math.random;{let a=6;Math.random=()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+const N=[["S1","Substation 1",50,130],["A","Feeder A",150,45],["B","Feeder B",150,130],["C","Feeder C",150,215],["S2","Substation 2",250,130],["D","Feeder D",340,55],["E","Feeder E",340,205]];
+const L=[[0,1],[0,2],[0,3],[2,4],[1,4],[3,4],[4,5],[4,6]];
+const nb=i=>L.filter(l=>l.includes(i)).map(l=>l[0]==i?l[1]:l[0]);
+const M={v:{n:"Voltage",u:"V",d:1},i:{n:"Current",u:"A",d:0},f:{n:"Frequency",u:"Hz",d:2},l:{n:"Load",u:"%",d:0}};
+const FL={v:.8,i:1.5,f:.012,l:1.2},COL=["var(--grn)","var(--amb)","var(--red)"];
+const g=()=>(Math.random()+Math.random()+Math.random()-1.5)*2;
+const nodes=N.map((n,k)=>({id:n[0],name:n[1],x:n[2],y:n[3],base:84+k*2,rate:130,fault:null,ramp:0,rv:0,h:{v:[],i:[],f:[],l:[]},ew:{},z:{},risk:0,lvl:0,eta:null}));
+let sel=2,met="i",alerts=[],auto=null;
+function sim(nd,k){
+ const ty=nd.fault&&nd.fault.t; if(ty)nd.ramp++; nd.rv=ty?Math.min(1,nd.ramp/12):0;
+ const c=nb(k).reduce((a,j)=>a+(nodes[j].fault&&nodes[j].fault.t=="ol"?nodes[j].rv:0),0)*.18;
+ const v=230+g()-(ty=="sag"?20*nd.rv:0)-c*8, i=nd.base*(1+g()*.025+(ty=="ol"?.75*nd.rv:0)+c), f=50+g()*.015-(ty=="fr"?.5*nd.rv:0)-c*.05;
+ return {v,i,f,l:i/nd.rate*100};
+}
+function det(nd,key,x){
+ let e=nd.ew[key]; if(!e)e=nd.ew[key]={m:x,s:FL[key],n:0};
+ const z=(x-e.m)/Math.max(e.s,FL[key]);
+ if(e.n<15||Math.abs(z)<2.5){e.m+=.05*(x-e.m);e.s+=.05*(Math.abs(x-e.m)-e.s)}
+ e.n++;return z;
+}
+const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const hhmm=()=>new Date().toLocaleTimeString([],{hour12:false});
+// ---- ML models: trained in your browser on simulated grid data ----
+const gen=(ty,r,c,b)=>{const i=b*(1+g()*.025+(ty=="ol"?.75*r:0)+c);return{v:230+g()-(ty=="sag"?20*r:0)-c*8,i,f:50+g()*.015-(ty=="fr"?.5*r:0)-c*.05,l:i/130*100,b}};
+const fv=s=>[s.v,s.i/s.b,s.f,s.l],cn=n=>n<2?0:2*(Math.log(n-1)+.5772)-2*(n-1)/n,pick=a=>a[Math.floor(Math.random()*a.length)];
+// 1) Isolation Forest: anomaly score from random-split path lengths
+function itree(X,d){if(d>=7||X.length<=1)return{n:X.length};const q=Math.floor(Math.random()*4),vs=X.map(x=>x[q]),a=Math.min(...vs),b=Math.max(...vs);if(a==b)return{n:X.length};const t=a+Math.random()*(b-a);return{q,t,l:itree(X.filter(x=>x[q]<t),d+1),r:itree(X.filter(x=>x[q]>=t),d+1)}}
+const hp=(t,x,d=0)=>t.q===undefined?d+cn(t.n):hp(x[t.q]<t.t?t.l:t.r,x,d+1);
+const NORM=Array.from({length:800},()=>fv(gen("",0,0,70+Math.random()*24)));
+const IF=Array.from({length:50},()=>itree(Array.from({length:128},()=>pick(NORM)),0));
+const iso=(r,b)=>{const x=fv({...r,b});return 2**(-IF.reduce((a,t)=>a+hp(t,x),0)/IF.length/cn(128))};
+// 2) XGBoost-style gradient boosting (second-order leaf values, logistic loss)
+const XT=[],YT=[];
+for(let k=0;k<700;k++){const ty=pick(["","sag","ol","fr"]),r=ty?Math.random():0,b=70+Math.random()*24,s=gen(ty,r,0,b),sl=(ty=="ol"&&r<.99?.75*b/130*100/12:0)+g()*.3;XT.push([iso(s,b),s.l,sl,Math.abs(s.v-230),Math.abs(s.f-50)]);YT.push(ty&&r>=.45?1:0)}
+const sg=x=>1/(1+Math.exp(-x));
+function rtree(D,res,hes,d){const lf=()=>({v:D.reduce((a,k)=>a+res[k],0)/(D.reduce((a,k)=>a+hes[k],0)+1e-6)});if(d==0||D.length<8)return lf();let best=null;
+ for(let q=0;q<5;q++){const vs=D.map(k=>XT[k][q]).sort((a,b)=>a-b);for(let j=1;j<10;j++){const t=vs[Math.floor(j*vs.length/10)];let gl=0,hl=0,gr=0,hr=0;for(const k of D){if(XT[k][q]<t){gl+=res[k];hl+=hes[k]}else{gr+=res[k];hr+=hes[k]}}if(hl<1e-3||hr<1e-3)continue;const sc=gl*gl/(hl+1)+gr*gr/(hr+1);if(!best||sc>best.sc)best={sc,q,t}}}
+ if(!best)return lf();return{q:best.q,t:best.t,l:rtree(D.filter(k=>XT[k][best.q]<best.t),res,hes,d-1),r:rtree(D.filter(k=>XT[k][best.q]>=best.t),res,hes,d-1)}}
+const rp=(t,x)=>t.q===undefined?t.v:rp(x[t.q]<t.t?t.l:t.r,x);
+const GB=[],F0=XT.map(()=>0),ALL=XT.map((_,k)=>k);
+for(let m=0;m<30;m++){const p=F0.map(sg),res=p.map((v,k)=>YT[k]-v),hes=p.map(v=>v*(1-v)),t=rtree(ALL,res,hes,3);GB.push(t);XT.forEach((x,k)=>F0[k]+=.3*rp(t,x))}
+const xgb=x=>sg(GB.reduce((a,t)=>a+.3*rp(t,x),0));
+// 3) LSTM cell (fixed gates) with a trained readout, forecasts load ahead
+const H=8,rw=n=>Array.from({length:n},()=>g()*.5),Wx=rw(4*H),Wh=rw(4*H*H),Bv=Array(4*H).fill(0);
+function lstm(seq){let h=Array(H).fill(0),c=Array(H).fill(0);const hs=[];for(const x0 of seq){const x=(x0-.6)*5,z=Array.from({length:4*H},(_,j)=>Bv[j]+Wx[j]*x+h.reduce((a,v,k)=>a+Wh[j*H+k]*v,0));h=h.map((_,k)=>{const i=sg(z[k]),f=sg(z[H+k]+1),gg=Math.tanh(z[2*H+k]),o=sg(z[3*H+k]);c[k]=f*c[k]+i*gg;return o*Math.tanh(c[k])});hs.push(h.concat(1))}return hs}
+function solve(M,v){const n=v.length;for(let i=0;i<n;i++){let p=i;for(let r=i+1;r<n;r++)if(Math.abs(M[r][i])>Math.abs(M[p][i]))p=r;[M[i],M[p]]=[M[p],M[i]];[v[i],v[p]]=[v[p],v[i]];for(let r=i+1;r<n;r++){const f=M[r][i]/M[i][i];for(let c=i;c<n;c++)M[r][c]-=f*M[i][c];v[r]-=f*v[i]}}const w=Array(n).fill(0);for(let i=n-1;i>=0;i--)w[i]=(v[i]-M[i].slice(i+1).reduce((a,m,k)=>a+m*w[i+1+k],0))/M[i][i];return w}
+const SER=[.65];{let sp=0;for(let t=0;t<900;t++){if(t%30==0)sp=(Math.random()-.5)*.06;const x=SER[t];SER.push(x+sp+.01*g()+.02*(.65-x))}}
+const HS=lstm(SER.slice(0,-1)).slice(5),TY=SER.slice(6).map((x,t)=>(x-SER[t+5])*10),RW=solve(Array.from({length:H+1},(_,a)=>Array.from({length:H+1},(_,b)=>HS.reduce((s,r)=>s+r[a]*r[b],0)+(a==b?.01:0))),Array.from({length:H+1},(_,a)=>HS.reduce((s,r,t)=>s+r[a]*TY[t],0)));
+function lstmF(hist){const seq=hist.slice(-30).map(x=>x/100),out=[];for(let s=0;s<15;s++){const last=lstm(seq).pop(),x=seq[seq.length-1]+last.reduce((a,v,k)=>a+v*RW[k],0)/10;seq.push(x);out.push(clamp(x*100,0,200))}return out}
+// 4) Random Forest: classifies the fault type
+const CL=[{k:"sag",n:"Voltage sag"},{k:"ol",n:"Overload"},{k:"fr",n:"Frequency drift"},{k:"cas",n:"Cascade stress"}],FT=[];
+for(let k=0;k<800;k++){const y=k%4,b=70+Math.random()*24,r=.3+Math.random()*.7,s=gen(["sag","ol","fr",""][y],r,y==3?.18*r:0,b),nv=(y==1?.18*r:y==3?.75*r:0)+g()*.025;FT.push([[s.v-230,s.i/b-1,s.f-50,s.i/b-1-nv],y])}
+function gtree(S,d){const cnt=[0,0,0,0];S.forEach(s=>cnt[s[1]]++);const mj=cnt.indexOf(Math.max(...cnt));if(d==0||S.length<4||cnt[mj]==S.length)return{c:mj};let best=null;
+ for(const q of [0,1,2,3].sort(()=>Math.random()-.5).slice(0,2))for(let j=0;j<8;j++){const t=pick(S)[0][q],L=S.filter(s=>s[0][q]<t),R=S.filter(s=>s[0][q]>=t);if(!L.length||!R.length)continue;const gi=A=>{const c=[0,0,0,0];A.forEach(s=>c[s[1]]++);return A.length*(1-c.reduce((a,v)=>a+(v/A.length)**2,0))},sc=gi(L)+gi(R);if(!best||sc<best.sc)best={sc,q,t,L,R}}
+ if(!best)return{c:mj};return{q:best.q,t:best.t,l:gtree(best.L,d-1),r:gtree(best.R,d-1)}}
+const RF=Array.from({length:25},()=>gtree(Array.from({length:FT.length},()=>pick(FT)),5));
+const rfp=(t,x)=>t.c!==undefined?t.c:rfp(x[t.q]<t.t?t.l:t.r,x);
+function rfc(r,b,k){const nv=Math.max(...nb(k).map(j=>(nodes[j].h.i.slice(-1)[0]||nodes[j].base)/nodes[j].base-1)),x=[r.v-230,r.i/b-1,r.f-50,r.i/b-1-nv],v=[0,0,0,0];RF.forEach(t=>v[rfp(t,x)]++);const m=v.indexOf(Math.max(...v));return{...CL[m],p:v[m]/RF.length}}
+Math.random=__mr;
+function tick(){
+ nodes.forEach((nd,k)=>{
+  const r=sim(nd,k);
+  for(const key in r){nd.h[key].push(r[key]);if(nd.h[key].length>60)nd.h[key].shift();nd.z[key]=det(nd,key,r[key])}
+  const lh=nd.h.l,n=lh.length,sl=n>6?(lh[n-1]-lh[n-6])/5:0,l=lh[n-1];
+  nd.ifs=iso(r,nd.base);nd.cls=rfc(r,nd.base,k);nd.fc=lstmF(nd.h.l);
+  nd.risk=clamp(nd.risk*.5+xgb([nd.ifs,l,sl,Math.abs(r.v-230),Math.abs(r.f-50)])*100*.5,0,100);
+  const ix=nd.fc.findIndex(v=>v>=100);nd.eta=l<100&&ix>=0?ix+1:null;
+  let lv=nd.risk>=50?2:nd.risk>=35?1:0;
+  if(nd.lvl==2&&nd.risk>=44)lv=2; if(nd.lvl>=1&&nd.risk>=20)lv=Math.max(lv,1);
+  nd.up=lv>nd.lvl?(nd.up||0)+1:0;if(nd.up==1)lv=nd.lvl;
+  if(lv>nd.lvl&&alerts!==null)alert(nd,lv); else if(lv==0&&nd.lvl>0)push("o",nd.name+": back to normal",""); nd.lvl=lv;
+ });
+}
+function alert(nd,lv){
+ const act={sag:"Check tap changer and reactive support.",ol:"Shed or shift load; inspect line and equipment.",fr:"Rebalance generation and demand; start reserves.",cas:"Isolate the overloaded neighbour and rebalance load."}[nd.cls.k];
+ push(lv==2?"c":"w",(lv==2?"CRITICAL · ":"Early warning · ")+nd.name+": "+nd.cls.n+" ("+Math.round(nd.cls.p*100)+"% confidence)","Isolation Forest score "+nd.ifs.toFixed(2)+" · XGBoost risk "+Math.round(nd.risk)+"% · Action: "+act+(nd.eta?" LSTM: load reaches 100% in ~"+nd.eta+"s.":""));
+}
+function push(c,t,a){if(!alerts)return;alerts.unshift({c,t,a,time:hhmm()});alerts=alerts.slice(0,8)}
+function draw(){
+ const nd=nodes[sel],avg=nodes.reduce((a,n)=>a+n.risk,0)/nodes.length,w=nodes.filter(n=>n.lvl>=1).length,h=nodes.filter(n=>n.lvl==2).length;
+ const kp=(id,v,c)=>{$(id+" b").textContent=v;$(id).style.borderColor=c};
+ kp("#k1",Math.round(100-avg)+"%",avg<15?COL[0]:avg<35?COL[1]:COL[2]);kp("#k2",w,w?COL[1]:COL[0]);kp("#k3",h,h?COL[2]:COL[0]);
+ $("#map").innerHTML=L.map(l=>{const a=nodes[l[0]],b=nodes[l[1]],s=Math.max(a.lvl,b.lvl);return`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${s?COL[s]:"var(--line)"}" stroke-width="${s?3:2}"/>`}).join("")+
+ nodes.map((n,k)=>`<g class="nd" data-k="${k}"><circle cx="${n.x}" cy="${n.y}" r="${k==sel?22:18}" fill="none" stroke="var(--amb)" stroke-width="${k==sel?2:0}"/><circle class="${n.lvl==2?"p":""}" cx="${n.x}" cy="${n.y}" r="14" fill="${COL[n.lvl]}"/><text class="nl" x="${n.x}" y="${n.y+32}">${n.name}</text><text x="${n.x}" y="${n.y+4}" text-anchor="middle" font-size="10" font-weight="700" fill="#0b1220">${Math.round(n.risk)}</text></g>`).join("");
+ $("#tabs").innerHTML=Object.keys(M).map(k=>`<button data-m="${k}" class="${k==met?"on":""}">${M[k].n}</button>`).join("");
+ $("#ct").textContent=nd.name+" · "+M[met].n;
+ const fcv=met=="l"?nd.fc:[],s=nd.h[met],e=nd.ew[met],sd=Math.max(e.s,FL[met])*2.5,lo=Math.min(...s,...fcv,e.m-sd*1.4),hi=Math.max(...s,...fcv,e.m+sd*1.4),Y=v=>170-(v-lo)/(hi-lo||1)*155,X=i=>40+i*(350/(59+fcv.length));
+ $("#ch").innerHTML=`<rect x="40" y="${Y(e.m+sd)}" width="350" height="${Y(e.m-sd)-Y(e.m+sd)}" fill="var(--grn)" opacity=".15"/><polyline fill="none" stroke="var(--amb)" stroke-width="2.5" points="${s.map((v,i)=>X(i)+","+Y(v)).join(" ")}"/>${fcv.length?`<polyline fill="none" stroke="var(--red)" stroke-width="2" stroke-dasharray="4 3" points="${[s[s.length-1],...fcv].map((v,i)=>X(s.length-1+i)+","+Y(v)).join(" ")}"/>`:""}<text class="t" x="36" y="16" text-anchor="end">${hi.toFixed(M[met].d)}</text><text class="t" x="36" y="172" text-anchor="end">${lo.toFixed(M[met].d)}</text><text class="t" x="40" y="186">60s ago</text><text class="t" x="390" y="186" text-anchor="end">green = normal range${met=="l"?" · dashed = LSTM forecast":""}</text>`;
+ $("#info").innerHTML='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:8px;margin-top:8px">'+[["Isolation Forest",nd.ifs.toFixed(2),"anomaly score"+(nd.ifs>.65?" · ANOMALY":"")],["XGBoost",Math.round(nd.risk)+"%","failure risk · "+["Healthy","Watch","Critical"][nd.lvl]],["LSTM",nd.fc[9].toFixed(0)+"%","load in 10s"+(nd.eta?" · trip ~"+nd.eta+"s":"")],["Random Forest",nd.risk>=20||nd.ifs>.65?nd.cls.n:"No fault","fault type"+(nd.risk>=20?" · "+Math.round(nd.cls.p*100)+"%":"")]].map(a=>'<div style="background:var(--soft);border-radius:8px;padding:8px"><small style="color:var(--mu)">'+a[0]+'</small><div style="font-size:17px;font-weight:700">'+a[1]+'</div><small style="color:var(--mu)">'+a[2]+'</small></div>').join("")+'</div>';
+ $("#rk").innerHTML=nodes.map((n,k)=>[n,k]).sort((a,b)=>b[0].risk-a[0].risk).map(([n,k])=>`<div class="rk" data-k="${k}"><span>${n.name}</span><div class="bar"><i style="width:${n.risk}%;background:${COL[n.lvl]}"></i></div><b>${Math.round(n.risk)}</b></div>`).join("");
+ if(alerts.length)$("#al").innerHTML=alerts.map(a=>`<div class="al ${a.c}"><small>${a.time}</small><br>${a.t}${a.a?`<br><small>${a.a}</small>`:""}</div>`).join("");
+}
+const onAct=ev=>{
+ const k=ev.target.closest("[data-k]"),m=ev.target.closest("[data-m]"),f=ev.target.closest("[data-f]");
+ if(k)sel=+k.dataset.k; if(m)met=m.dataset.m;
+ if(f){nodes[sel].fault={t:f.dataset.f};nodes[sel].ramp=0}
+ if(ev.target.id=="rs")nodes.forEach(n=>{n.fault=null;n.ramp=0});
+ if(ev.target.id=="au"){if(auto){clearInterval(auto);auto=null}else{const go=()=>{nodes.forEach(n=>n.fault=null);const n=nodes[Math.floor(Math.random()*nodes.length)];n.fault={t:["sag","ol","fr"][Math.floor(Math.random()*3)]};n.ramp=0;sel=nodes.indexOf(n)};go();auto=setInterval(go,25000)}$("#au").textContent="Auto-demo: "+(auto?"on":"off")}
+ draw();
+};
+document.addEventListener("pointerdown",onAct);document.addEventListener("click",ev=>{if(ev.detail===0)onAct(ev)});
+const keep=alerts;alerts=null;for(let i=0;i<40;i++)tick();alerts=keep;
+draw();setInterval(()=>{tick();draw()},1000);
+</script></body></html>
